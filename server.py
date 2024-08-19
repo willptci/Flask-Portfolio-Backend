@@ -1,22 +1,18 @@
-import tempfile
-import os
-from flask import Flask, request, jsonify, Response, send_file
+from flask import Flask, request, jsonify, Response, send_file, send_from_directory
 from flask_cors import CORS, cross_origin
+import os
+import tempfile
 import cv2
 import face_recognition
-#import pyttsx3
 import time
 from openai import OpenAI
 import gtts
 import io
-import requests
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder='my-portfolio/build', static_url_path='')
 CORS(app)
 
-latest_tts_text = None
-
-# Directories for storing files
+# Define directories
 UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), 'uploads')
 IMAGE_DIRECTORY = os.path.join(os.path.dirname(__file__), 'images')
 
@@ -27,13 +23,13 @@ os.makedirs(IMAGE_DIRECTORY, exist_ok=True)
 # Initialize known faces
 known_face_encodings = []
 known_face_names = []
-#engine = pyttsx3.init()
-client = OpenAI(api_key=OPENAI_KEY)
+client = OpenAI(api_key=OPEN_AI_KEY)
 
 # Global variable to control video capture
 camera_active = False
 cap = None
 latest_audio_url = None
+latest_tts_text = "Default text"
 
 # Load known faces
 def load_known_faces():
@@ -51,8 +47,10 @@ def load_known_faces():
 load_known_faces()
 
 @app.route('/upload', methods=['POST'])
-@cross_origin(origin='*')
+@cross_origin()
 def upload():
+    print("upload attempt")
+
     file = request.files['file']
 
     with tempfile.NamedTemporaryFile(delete=False) as temp_file:
@@ -83,11 +81,14 @@ def recognize_faces(image):
     return names
 
 def generate_frames():
+    print("generating frames")
     global cap, camera_active, latest_tts_text
     if not camera_active:
         return
     
     cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("Error: Could not access the camera.")
     last_response_time = 0
     response_text = "No faces recognized."
     frame_skip = 5
@@ -96,6 +97,7 @@ def generate_frames():
     while camera_active:
         success, frame = cap.read()
         if not success:
+            print("Error: Could not read a frame from the camera.")
             break
 
         frame_count += 1
@@ -127,12 +129,15 @@ def generate_frames():
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
 
 @app.route('/get_latest_text', methods=['GET'])
+@cross_origin()
 def get_latest_text():
+    global latest_tts_text
     return jsonify({"text": latest_tts_text})
 
 @app.route('/tts', methods=['POST'])
+@cross_origin()
 def tts():
-    # Retrieve text from JSON body
+    global latest_tts_text
     request_data = request.get_json()
     text = request_data.get('text', '')
     if not text:
@@ -143,6 +148,9 @@ def tts():
     tts.write_to_fp(audio_stream)
     audio_stream.seek(0)
 
+    global latest_tts_text
+    latest_tts_text = text
+
     return send_file(
         audio_stream,
         mimetype='audio/mpeg',
@@ -151,6 +159,7 @@ def tts():
     )
 
 @app.route('/get_latest_audio', methods=['GET'])
+@cross_origin()
 def get_latest_audio():
     if latest_audio_url:
         return jsonify({"audio_url": latest_audio_url})
@@ -158,16 +167,21 @@ def get_latest_audio():
         return jsonify({"audio_url": None})
 
 @app.route('/video_feed')
+@cross_origin()
 def video_feed():
+    print("mark video feed")
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 @app.route('/start_video', methods=['POST'])
+@cross_origin()
 def start_video():
+    print("start feed")
     global camera_active
     camera_active = True
     return jsonify({"message": "Video feed started."})
 
 @app.route('/stop_video', methods=['POST'])
+@cross_origin()
 def stop_video():
     global camera_active
     camera_active = False
@@ -186,6 +200,11 @@ def get_chatgpt_response(recognized_names):
         ]
     )
     return response.choices[0].message.content
+
+@app.route('/')
+@cross_origin()
+def serve():
+    return send_from_directory(app.static_folder, 'index.html')
 
 if __name__ == '__main__':
     app.run(debug=True)
